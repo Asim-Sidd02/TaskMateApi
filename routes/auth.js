@@ -6,7 +6,7 @@ const { signAccessToken, signRefreshToken, verifyRefreshToken } = require('../ut
 
 const router = express.Router();
 
-const PASSWORD_MIN = 6;
+const PASSWORD_MIN = 8;
 const USERNAME_MIN = 3;
 const MAX_REFRESH_TOKENS = 8;
 
@@ -35,19 +35,30 @@ router.post(
         return res.status(409).json({ message: 'Username already in use' });
       }
 
-      const passwordHash = await bcrypt.hash(password, 10);
+      const passwordHash = await bcrypt.hash(password, 12);
 
-      const refreshToken = signRefreshToken({ _id: undefined, username: cleanUsername, email: cleanEmail });
+   
       const user = new User({
         username: cleanUsername,
         email: cleanEmail,
         passwordHash,
-        refreshTokens: [{ token: refreshToken, createdAt: new Date() }]
+        refreshTokens: []
       });
 
       await user.save();
 
+  
       const accessToken = signAccessToken(user);
+      const refreshToken = signRefreshToken(user);
+
+ 
+      user.refreshTokens.push({ token: refreshToken, createdAt: new Date() });
+
+      if (user.refreshTokens.length > MAX_REFRESH_TOKENS) {
+        user.refreshTokens = user.refreshTokens.slice(-MAX_REFRESH_TOKENS);
+      }
+
+      await user.save();
 
       return res.status(201).json({
         message: 'User registered',
@@ -57,6 +68,7 @@ router.post(
     } catch (err) {
       console.error('Register error:', err);
 
+ 
       if (err && err.code === 11000) {
         const dupKey = Object.keys(err.keyValue || {})[0];
         return res.status(409).json({ message: `${dupKey} already exists` });
@@ -66,6 +78,7 @@ router.post(
     }
   }
 );
+
 
 router.post(
   '/login',
@@ -88,7 +101,6 @@ router.post(
       const accessToken = signAccessToken(user);
       const refreshToken = signRefreshToken(user);
 
- 
       user.refreshTokens.push({ token: refreshToken, createdAt: new Date() });
       if (user.refreshTokens.length > MAX_REFRESH_TOKENS) {
         user.refreshTokens = user.refreshTokens.slice(-MAX_REFRESH_TOKENS);
@@ -113,6 +125,7 @@ router.post('/refresh', async (req, res) => {
   if (!refreshToken) return res.status(400).json({ message: 'Refresh token required' });
 
   try {
+
     const payload = verifyRefreshToken(refreshToken);
     const userId = payload.sub;
     if (!userId) return res.status(401).json({ message: 'Invalid refresh token' });
@@ -132,7 +145,6 @@ router.post('/refresh', async (req, res) => {
     user.refreshTokens = user.refreshTokens.filter(rt => rt.token !== refreshToken);
     const newRefresh = signRefreshToken(user);
     user.refreshTokens.push({ token: newRefresh, createdAt: new Date() });
-
 
     if (user.refreshTokens.length > MAX_REFRESH_TOKENS) {
       user.refreshTokens = user.refreshTokens.slice(-MAX_REFRESH_TOKENS);
@@ -168,7 +180,6 @@ router.post('/logout', async (req, res) => {
 
     user.refreshTokens = user.refreshTokens.filter(rt => rt.token !== refreshToken);
     await user.save();
-
     return res.status(200).json({ message: 'Logged out' });
   } catch (err) {
     console.error('Logout error:', err);
