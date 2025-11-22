@@ -11,6 +11,10 @@ const PASSWORD_MIN = 8;
 const USERNAME_MIN = 3;
 const MAX_REFRESH_TOKENS = 8;
 
+console.log('routes/auth.js loaded');
+const express = require('express');
+
+
 router.post(
   '/register',
   body('username').isString().trim().isLength({ min: USERNAME_MIN }).withMessage(`username must be at least ${USERNAME_MIN} characters`),
