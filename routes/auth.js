@@ -1,7 +1,10 @@
+// routes/auth.js
+console.log('routes/auth.js loaded');
+
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const bcrypt = require('bcryptjs');
-const jwtDecode = require('jsonwebtoken'); 
+const jwtDecode = require('jsonwebtoken'); // for decode in logout
 const User = require('../models/User');
 const { signAccessToken, signRefreshToken, verifyRefreshToken } = require('../utils/tokens');
 
@@ -11,10 +14,7 @@ const PASSWORD_MIN = 8;
 const USERNAME_MIN = 3;
 const MAX_REFRESH_TOKENS = 8;
 
-console.log('routes/auth.js loaded');
-const express = require('express');
-
-
+// POST /register
 router.post(
   '/register',
   body('username').isString().trim().isLength({ min: USERNAME_MIN }).withMessage(`username must be at least ${USERNAME_MIN} characters`),
@@ -78,6 +78,7 @@ router.post(
   }
 );
 
+// POST /login
 router.post(
   '/login',
   body('email').isEmail().withMessage('valid email required'),
@@ -117,6 +118,7 @@ router.post(
   }
 );
 
+// POST /refresh
 router.post('/refresh', async (req, res) => {
   const { refreshToken } = req.body;
   if (!refreshToken) return res.status(400).json({ message: 'Refresh token required' });
@@ -154,6 +156,7 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
+// POST /logout
 router.post('/logout', async (req, res) => {
   try {
     const { refreshToken } = req.body;
@@ -168,10 +171,11 @@ router.post('/logout', async (req, res) => {
 
     if (!decoded || !decoded.sub) return res.status(200).json({ message: 'Logged out' });
 
-  await User.updateOne(
-  { _id: decoded.sub },
-  { $pull: { refreshTokens: { token: refreshToken } } }
-);
+    // Atomic update to avoid triggering full-document validation
+    await User.updateOne(
+      { _id: decoded.sub },
+      { $pull: { refreshTokens: { token: refreshToken } } }
+    );
 
     return res.status(200).json({ message: 'Logged out' });
   } catch (err) {
