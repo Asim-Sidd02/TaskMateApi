@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const bcrypt = require('bcryptjs');
+const jwtDecode = require('jsonwebtoken'); 
 const User = require('../models/User');
 const { signAccessToken, signRefreshToken, verifyRefreshToken } = require('../utils/tokens');
 
@@ -9,7 +10,6 @@ const router = express.Router();
 const PASSWORD_MIN = 8;
 const USERNAME_MIN = 3;
 const MAX_REFRESH_TOKENS = 8;
-
 
 router.post(
   '/register',
@@ -25,7 +25,6 @@ router.post(
     const cleanEmail = (email || '').trim().toLowerCase();
 
     try {
-     
       const existing = await User.findOne({
         $or: [{ email: cleanEmail }, { username: cleanUsername }]
       });
@@ -37,7 +36,6 @@ router.post(
 
       const passwordHash = await bcrypt.hash(password, 12);
 
-   
       const user = new User({
         username: cleanUsername,
         email: cleanEmail,
@@ -47,11 +45,9 @@ router.post(
 
       await user.save();
 
-  
-      const accessToken = signAccessToken(user);
-      const refreshToken = signRefreshToken(user);
+      const accessToken = signAccessToken({ _id: user._id, email: user.email, username: user.username });
+      const refreshToken = signRefreshToken({ _id: user._id });
 
- 
       user.refreshTokens.push({ token: refreshToken, createdAt: new Date() });
 
       if (user.refreshTokens.length > MAX_REFRESH_TOKENS) {
@@ -68,7 +64,6 @@ router.post(
     } catch (err) {
       console.error('Register error:', err);
 
- 
       if (err && err.code === 11000) {
         const dupKey = Object.keys(err.keyValue || {})[0];
         return res.status(409).json({ message: `${dupKey} already exists` });
@@ -78,7 +73,6 @@ router.post(
     }
   }
 );
-
 
 router.post(
   '/login',
@@ -98,8 +92,8 @@ router.post(
       const ok = await bcrypt.compare(password, user.passwordHash);
       if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
 
-      const accessToken = signAccessToken(user);
-      const refreshToken = signRefreshToken(user);
+      const accessToken = signAccessToken({ _id: user._id, email: user.email, username: user.username });
+      const refreshToken = signRefreshToken({ _id: user._id });
 
       user.refreshTokens.push({ token: refreshToken, createdAt: new Date() });
       if (user.refreshTokens.length > MAX_REFRESH_TOKENS) {
@@ -119,13 +113,11 @@ router.post(
   }
 );
 
-
 router.post('/refresh', async (req, res) => {
   const { refreshToken } = req.body;
   if (!refreshToken) return res.status(400).json({ message: 'Refresh token required' });
 
   try {
-
     const payload = verifyRefreshToken(refreshToken);
     const userId = payload.sub;
     if (!userId) return res.status(401).json({ message: 'Invalid refresh token' });
@@ -135,15 +127,13 @@ router.post('/refresh', async (req, res) => {
 
     const found = user.refreshTokens.find(rt => rt.token === refreshToken);
     if (!found) {
- 
       user.refreshTokens = [];
       await user.save();
       return res.status(401).json({ message: 'Refresh token not recognized' });
     }
 
-
     user.refreshTokens = user.refreshTokens.filter(rt => rt.token !== refreshToken);
-    const newRefresh = signRefreshToken(user);
+    const newRefresh = signRefreshToken({ _id: user._id });
     user.refreshTokens.push({ token: newRefresh, createdAt: new Date() });
 
     if (user.refreshTokens.length > MAX_REFRESH_TOKENS) {
@@ -152,7 +142,7 @@ router.post('/refresh', async (req, res) => {
 
     await user.save();
 
-    const newAccess = signAccessToken(user);
+    const newAccess = signAccessToken({ _id: user._id, email: user.email, username: user.username });
     return res.json({ accessToken: newAccess, refreshToken: newRefresh });
   } catch (err) {
     console.error('Refresh error:', err);
@@ -160,15 +150,14 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
-
 router.post('/logout', async (req, res) => {
   try {
     const { refreshToken } = req.body;
-    if (!refreshToken) return res.status(400).json({ message: 'Refresh token required' });
+    if (!refreshToken) return res.status(200).json({ message: 'Logged out' });
 
     let decoded;
     try {
-      decoded = require('jsonwebtoken').decode(refreshToken);
+      decoded = jwtDecode.decode(refreshToken);
     } catch (e) {
       decoded = null;
     }

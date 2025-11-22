@@ -1,11 +1,14 @@
+
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const Task = require('../models/Task');
+const auth = require('../middleware/auth');
 
 const router = express.Router();
 
 const VALID_STATUSES = ['not started', 'active', 'completed'];
 
+router.use(auth);
 
 router.get('/', async (req, res) => {
   try {
@@ -17,11 +20,10 @@ router.get('/', async (req, res) => {
     const tasks = await Task.find(filter).sort({ endDate: 1, createdAt: -1 }).lean();
     res.json(tasks);
   } catch (err) {
-    console.error(err);
+    console.error('Get tasks error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
-
 
 router.post(
   '/',
@@ -42,18 +44,17 @@ router.post(
         description: description || '',
         startDate: startDate ? new Date(startDate) : Date.now(),
         endDate: endDate ? new Date(endDate) : undefined,
-        status: status && VALID_STATUSES.includes(status) ? status : 'not started',
+        status: status && VALID_STATUSES.includes(status) ? status : 'not started'
       });
 
       await task.save();
       res.status(201).json(task);
     } catch (err) {
-      console.error(err);
+      console.error('Create task error:', err);
       res.status(500).json({ message: 'Server error' });
     }
   }
 );
-
 
 router.put(
   '/:id',
@@ -91,12 +92,11 @@ router.put(
       if (!task) return res.status(404).json({ message: 'Task not found' });
       res.json(task);
     } catch (err) {
-      console.error(err);
+      console.error('Update task error:', err);
       res.status(500).json({ message: 'Server error' });
     }
   }
 );
-
 
 router.delete('/:id', async (req, res) => {
   try {
@@ -105,7 +105,7 @@ router.delete('/:id', async (req, res) => {
     if (!task) return res.status(404).json({ message: 'Task not found' });
     res.json({ message: 'Deleted' });
   } catch (err) {
-    console.error(err);
+    console.error('Delete task error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });

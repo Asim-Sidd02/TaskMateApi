@@ -1,30 +1,41 @@
-// src/middleware/auth.js
 const { verifyAccessToken } = require('../utils/tokens');
 
 module.exports = function authMiddleware(req, res, next) {
   try {
     const auth = req.headers.authorization;
-    if (!auth || !auth.startsWith('Bearer ')) {
+    if (!auth) {
       return res.status(401).json({ message: 'Authorization required' });
     }
-    const token = auth.split(' ')[1];
+
+    const parts = auth.split(' ').filter(Boolean);
+    if (parts.length !== 2 || parts[0].toLowerCase() !== 'bearer') {
+      return res.status(401).json({ message: 'Authorization required (Bearer token)' });
+    }
+
+    const token = parts[1];
+
     let payload;
     try {
-      payload = verifyAccessToken(token); // may throw
+      payload = verifyAccessToken(token);
     } catch (err) {
       console.error('authMiddleware: token verify failed:', err.message || err);
       return res.status(401).json({ message: 'Invalid or expired token' });
     }
 
-    // attach user info (normalized)
+    if (!payload || !payload.sub) {
+      console.error('authMiddleware: token payload missing sub', payload);
+      return res.status(401).json({ message: 'Invalid token payload' });
+    }
+
     req.user = {
-      id: payload.sub, // important: tokens.js signs sub
-      email: payload.email,
-      username: payload.username,
+      id: String(payload.sub),
+      email: payload.email || null,
+      username: payload.username || null
     };
 
-    // helpful debug log (remove in production)
-    console.debug('authMiddleware: user=', req.user);
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('authMiddleware: user=', req.user);
+    }
 
     next();
   } catch (err) {
