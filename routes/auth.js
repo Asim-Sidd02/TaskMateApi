@@ -4,7 +4,7 @@ console.log('routes/auth.js loaded');
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const bcrypt = require('bcryptjs');
-const jwtDecode = require('jsonwebtoken'); // for decode in logout
+const jwtLib = require('jsonwebtoken'); // for decode in logout
 const User = require('../models/User');
 const { signAccessToken, signRefreshToken, verifyRefreshToken } = require('../utils/tokens');
 
@@ -13,6 +13,18 @@ const router = express.Router();
 const PASSWORD_MIN = 8;
 const USERNAME_MIN = 3;
 const MAX_REFRESH_TOKENS = 8;
+
+/**
+ * Helper to build a consistent token response.
+ * Returns both top-level keys and a tokens object for backward compatibility.
+ */
+function tokenResponseObject(accessToken, refreshToken) {
+  return {
+    accessToken,
+    refreshToken,
+    tokens: { accessToken, refreshToken },
+  };
+}
 
 // POST /register
 router.post(
@@ -60,11 +72,14 @@ router.post(
 
       await user.save();
 
-      return res.status(201).json({
+      const resp = {
         message: 'User registered',
         user: { id: user._id, username: user.username, email: user.email },
-        tokens: { accessToken, refreshToken }
-      });
+        ...tokenResponseObject(accessToken, refreshToken)
+      };
+
+      console.log('Register response for user:', user._id.toString());
+      return res.status(201).json(resp);
     } catch (err) {
       console.error('Register error:', err);
 
@@ -106,11 +121,14 @@ router.post(
       }
       await user.save();
 
-      return res.json({
+      const resp = {
         message: 'Logged in',
         user: { id: user._id, username: user.username, email: user.email },
-        tokens: { accessToken, refreshToken }
-      });
+        ...tokenResponseObject(accessToken, refreshToken)
+      };
+
+      console.log('Login response for user:', user._id.toString());
+      return res.json(resp);
     } catch (err) {
       console.error('Login error:', err);
       return res.status(500).json({ message: 'Server error' });
@@ -164,7 +182,7 @@ router.post('/logout', async (req, res) => {
 
     let decoded;
     try {
-      decoded = jwtDecode.decode(refreshToken);
+      decoded = jwtLib.decode(refreshToken);
     } catch (e) {
       decoded = null;
     }
