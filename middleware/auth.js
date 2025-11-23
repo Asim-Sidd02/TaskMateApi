@@ -1,4 +1,4 @@
-// middleware/auth.js
+// middleware/auth.js - core part
 const { verifyAccessToken } = require('../utils/tokens');
 
 module.exports = function authMiddleware(req, res, next) {
@@ -10,20 +10,18 @@ module.exports = function authMiddleware(req, res, next) {
     const token = auth.split(' ')[1];
     let payload;
     try {
-      payload = verifyAccessToken(token);
+      payload = verifyAccessToken(token); // may throw
     } catch (err) {
-      console.error('authMiddleware: token verify failed:', (err && err.message) || err);
       return res.status(401).json({ message: 'Invalid or expired token' });
     }
 
     req.user = {
-      id: payload.sub,
-      email: payload.email,
-      username: payload.username
+      id: payload.sub ? payload.sub.toString() : null,
+      email: payload.email || null,
+      username: payload.username || null,
     };
 
-    // debug
-    // console.debug('authMiddleware: user=', req.user);
+    if (!req.user.id) return res.status(401).json({ message: 'Invalid token payload' });
 
     next();
   } catch (err) {
