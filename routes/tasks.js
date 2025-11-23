@@ -9,7 +9,7 @@ const router = express.Router();
 
 const VALID_STATUSES = ['not started', 'active', 'completed'];
 
-// LIST tasks - returns tasks user owns or collaborates on
+// LIST tasks - returns tasks user owns or collaborates on (populate collaborators)
 router.get('/', async (req, res) => {
   try {
     const userId = req.user.id;
@@ -20,7 +20,12 @@ router.get('/', async (req, res) => {
       ]
     };
     if (req.query.status && VALID_STATUSES.includes(req.query.status)) filter.status = req.query.status;
-    const tasks = await Task.find(filter).sort({ endDate: 1, createdAt: -1 }).lean();
+
+    const tasks = await Task.find(filter)
+      .populate('collaborators.userId', 'username email')
+      .sort({ endDate: 1, createdAt: -1 })
+      .lean();
+
     return res.json(tasks);
   } catch (err) {
     console.error('Tasks list error:', err);
@@ -31,10 +36,10 @@ router.get('/', async (req, res) => {
 // GET single task (must have view)
 router.get('/:id', async (req, res) => {
   try {
-    const task = await Task.findById(req.params.id).lean();
+    const task = await Task.findById(req.params.id).populate('collaborators.userId', 'username email').lean();
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
-    if (!canView(task, req.user.id)) return res.status(403).json({ message: 'Forbidden' });
+    if (!canView(task, req.user)) return res.status(403).json({ message: 'Forbidden' });
     return res.json(task);
   } catch (err) {
     console.error('Get task error:', err);
@@ -65,7 +70,8 @@ router.post(
         status: status && VALID_STATUSES.includes(status) ? status : 'not started'
       });
       await task.save();
-      return res.status(201).json(task);
+      const saved = await Task.findById(task._id).populate('collaborators.userId', 'username email').lean();
+      return res.status(201).json(saved);
     } catch (err) {
       console.error('Create task error:', err);
       return res.status(500).json({ message: 'Server error' });
@@ -91,7 +97,7 @@ router.put(
       const task = await Task.findById(id);
       if (!task) return res.status(404).json({ message: 'Task not found' });
 
-      if (!canEdit(task, req.user.id)) return res.status(403).json({ message: 'Forbidden' });
+      if (!canEdit(task, req.user)) return res.status(403).json({ message: 'Forbidden' });
 
       const allowed = ['title', 'description', 'startDate', 'endDate', 'status', 'done'];
       for (const key of allowed) {
@@ -105,7 +111,8 @@ router.put(
       }
 
       await task.save();
-      return res.json(task);
+      const saved = await Task.findById(task._id).populate('collaborators.userId', 'username email').lean();
+      return res.json(saved);
     } catch (err) {
       console.error('Update task error:', err);
       return res.status(500).json({ message: 'Server error' });
@@ -119,7 +126,7 @@ router.delete('/:id', async (req, res) => {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
-    if (!isOwner(task, req.user.id)) return res.status(403).json({ message: 'Only owner can delete' });
+    if (!isOwner(task, req.user)) return res.status(403).json({ message: 'Only owner can delete' });
 
     await Task.deleteOne({ _id: task._id });
     return res.json({ message: 'Deleted' });
@@ -146,7 +153,7 @@ router.post(
       const task = await Task.findById(req.params.id);
       if (!task) return res.status(404).json({ message: 'Task not found' });
 
-      if (!isOwner(task, req.user.id)) return res.status(403).json({ message: 'Only owner can share' });
+      if (!isOwner(task, req.user)) return res.status(403).json({ message: 'Only owner can share' });
 
       let targetUser = null;
       if (req.body.userId) {
@@ -164,7 +171,7 @@ router.post(
         return res.status(400).json({ message: 'User is already owner' });
       }
 
-      const existing = task.collaborators.find(c => c.userId.toString() === targetUser._id.toString());
+      const existing = task.collaborators.find(c => c.userId && c.userId.toString() === targetUser._id.toString());
       if (existing) {
         existing.role = req.body.role;
       } else {
@@ -172,7 +179,8 @@ router.post(
       }
 
       await task.save();
-      return res.status(200).json({ message: 'Collaborator added/updated', collaborator: { id: targetUser._id, email: targetUser.email, role: req.body.role } });
+      const saved = await Task.findById(task._id).populate('collaborators.userId', 'username email').lean();
+      return res.status(200).json({ message: 'Collaborator added/updated', collaborator: { id: targetUser._id, email: targetUser.email, role: req.body.role }, task: saved });
     } catch (err) {
       console.error('Share task error:', err);
       return res.status(500).json({ message: 'Server error' });
@@ -184,11 +192,32 @@ router.post(
 router.get('/:id/collaborators', async (req, res) => {
   try {
     const task = await Task.findById(req.params.id).populate('collaborators.userId', 'username email').lean();
-    if (!task) return res.status(404).json({ message: 'Task not found' });
+    if (!task) {
+      console.error('List task collaborators: task not found id=', req.params.id);
+      return res.status(404).json({ message: 'Task not found' });
+    }
 
-    if (!canView(task, req.user.id)) return res.status(403).json({ message: 'Forbidden' });
+    console.log('List task collaborators: req.user=', req.user);
+    console.log('List task collaborators: task.owner=', task.userId, 'collaborators=', task.collaborators);
 
-    return res.json(task.collaborators);
+    if (!canView(task, req.user)) {
+      console.warn('List task collaborators: permission denied - caller=', req.user, 'taskId=', req.params.id);
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+
+    const normalized = (task.collaborators || []).map(c => {
+      const userObj = c.userId && typeof c.userId === 'object' ? c.userId : null;
+      return {
+        id: userObj && userObj._id ? userObj._id : (c.userId ? c.userId : null),
+        username: userObj && userObj.username ? userObj.username : (c.username ? c.username : null),
+        email: userObj && userObj.email ? userObj.email : (c.email ? c.email : null),
+        role: c.role || null,
+        addedAt: c.addedAt || c.createdAt || null,
+        collabId: c._id ? c._id : null
+      };
+    });
+
+    return res.json(normalized);
   } catch (err) {
     console.error('List collaborators error:', err);
     return res.status(500).json({ message: 'Server error' });
@@ -201,14 +230,15 @@ router.delete('/:id/collaborators/:collabId', async (req, res) => {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
-    if (!isOwner(task, req.user.id)) return res.status(403).json({ message: 'Only owner can remove collaborators' });
+    if (!isOwner(task, req.user)) return res.status(403).json({ message: 'Only owner can remove collaborators' });
 
     const before = task.collaborators.length;
     task.collaborators = task.collaborators.filter(c => c._id.toString() !== req.params.collabId);
     if (task.collaborators.length === before) return res.status(404).json({ message: 'Collaborator not found' });
 
     await task.save();
-    return res.json({ message: 'Removed' });
+    const saved = await Task.findById(task._id).populate('collaborators.userId', 'username email').lean();
+    return res.json({ message: 'Removed', task: saved });
   } catch (err) {
     console.error('Remove collaborator error:', err);
     return res.status(500).json({ message: 'Server error' });

@@ -9,9 +9,27 @@ function isOwner(doc, caller) {
 function _normalizeCaller(caller) {
   if (!caller) return { id: null, email: null };
   if (typeof caller === 'string') return { id: caller, email: null };
-  return { id: caller.id ? _toIdString(caller.id) : (caller._id ? _toIdString(caller._id) : null),
-           email: caller.email ? String(caller.email).toLowerCase() : null };
+  // caller is likely req.user
+  const id = caller.id ?? caller._id ?? caller.sub ?? null;
+  const email = caller.email ? String(caller.email).toLowerCase() : null;
+  return { id: _toIdString(id), email };
 }
+function _toIdString(v) {
+  if (!v && v !== 0) return null;
+  if (typeof v === 'string') return v;
+  // Mongoose ObjectId or populated user object
+  if (typeof v === 'object') {
+    if (v._id) {
+      try { return v._id.toString(); } catch (e) { return String(v._id); }
+    }
+    if (v.id) {
+      try { return v.id.toString(); } catch (e) { return String(v.id); }
+    }
+    try { return v.toString(); } catch (e) { return null; }
+  }
+  return null;
+}
+
 
 function getCollaborator(resource, userId) {
   if (!resource || !resource.collaborators) return null;
@@ -32,11 +50,14 @@ function canEdit(doc, caller) {
 
   const collabs = Array.isArray(doc.collaborators) ? doc.collaborators : [];
   for (const c of collabs) {
-    if (c.userId && callerNorm.id && _toIdString(c.userId) === callerNorm.id) {
-      return c.role === 'editor' || c.role === 'owner';
+    const collabUserId = _toIdString(c.userId);
+    const collabEmail = c.email ? String(c.email).toLowerCase() : null;
+    const role = c.role ? String(c.role).toLowerCase() : '';
+    if (collabUserId && callerNorm.id && collabUserId === callerNorm.id) {
+      if (role === 'editor' || role === 'owner') return true;
     }
-    if (c.email && callerNorm.email && String(c.email).toLowerCase() === callerNorm.email) {
-      return c.role === 'editor' || c.role === 'owner';
+    if (collabEmail && callerNorm.email && collabEmail === callerNorm.email) {
+      if (role === 'editor' || role === 'owner') return true;
     }
   }
   return false;
@@ -55,10 +76,12 @@ function canView(doc, caller) {
   if (isOwner(doc, callerNorm)) return true;
 
   const collabs = Array.isArray(doc.collaborators) ? doc.collaborators : [];
-  // match by userId if present, else by email
   for (const c of collabs) {
-    if (c.userId && callerNorm.id && _toIdString(c.userId) === callerNorm.id) return true;
-    if (c.email && callerNorm.email && String(c.email).toLowerCase() === callerNorm.email) return true;
+    // collaborator may have userId (ObjectId/string), or email field when invited by email
+    const collabUserId = _toIdString(c.userId);
+    const collabEmail = c.email ? String(c.email).toLowerCase() : null;
+    if (collabUserId && callerNorm.id && collabUserId === callerNorm.id) return true;
+    if (collabEmail && callerNorm.email && collabEmail === callerNorm.email) return true;
   }
   return false;
 }

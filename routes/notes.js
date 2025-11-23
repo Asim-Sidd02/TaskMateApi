@@ -175,10 +175,33 @@ router.post(
 router.get('/:id/collaborators', async (req, res) => {
   try {
     const note = await Note.findById(req.params.id).populate('collaborators.userId', 'username email').lean();
-    if (!note) return res.status(404).json({ message: 'Note not found' });
+    if (!note) {
+      console.error('List note collaborators: note not found id=', req.params.id);
+      return res.status(404).json({ message: 'Note not found' });
+    }
 
-    if (!canView(note, req.user)) return res.status(403).json({ message: 'Forbidden' });
-    return res.json(note.collaborators || []);
+    console.log('List note collaborators: req.user=', req.user);
+    console.log('List note collaborators: note.owner=', note.userId, 'collaborators=', note.collaborators);
+
+    if (!canView(note, req.user)) {
+      console.warn('List note collaborators: permission denied - caller=', req.user, 'noteId=', req.params.id);
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+
+    // Normalize collaborators for frontend consumption:
+    const normalized = (note.collaborators || []).map(c => {
+      const userObj = c.userId && typeof c.userId === 'object' ? c.userId : null;
+      return {
+        id: userObj && userObj._id ? userObj._id : (c.userId ? c.userId : null),
+        username: userObj && userObj.username ? userObj.username : (c.username ? c.username : null),
+        email: userObj && userObj.email ? userObj.email : (c.email ? c.email : null),
+        role: c.role || null,
+        addedAt: c.addedAt || c.createdAt || null,
+        collabId: c._id ? c._id : null
+      };
+    });
+
+    return res.json(normalized);
   } catch (err) {
     console.error('List note collaborators error:', err);
     return res.status(500).json({ message: 'Server error' });
