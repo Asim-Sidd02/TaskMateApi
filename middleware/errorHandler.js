@@ -1,9 +1,8 @@
-const errorHandler = (err, req, res, next) => {
-  console.error(err);
+// middleware/errorHandler.js
+function errorHandler(err, req, res, next) {
+  console.error('Unhandled error:', err);
   if (res.headersSent) return next(err);
-  const status = err.status || 500;
-  const message = err.message || 'Server error';
-  res.status(status).json({ message });
-};
+  res.status(500).json({ message: 'Server error' });
+}
 
 module.exports = { errorHandler };
