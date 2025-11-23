@@ -7,12 +7,18 @@ const { isOwner, canEdit, canView } = require('../utils/permissions');
 
 const router = express.Router();
 
-// list notes (owned or collaborated)
+// list notes (owned or collaborated) - populate collaborator user basic info
 router.get('/', async (req, res) => {
   try {
     const userId = req.user.id;
     const filter = { $or: [{ userId }, { 'collaborators.userId': userId }] };
-    const notes = await Note.find(filter).sort({ pinned: -1, updatedAt: -1 }).lean();
+
+    // populate collaborator user basic info (username, email) for frontend
+    const notes = await Note.find(filter)
+      .populate('collaborators.userId', 'username email')
+      .sort({ pinned: -1, updatedAt: -1 })
+      .lean();
+
     return res.json(notes);
   } catch (err) {
     console.error('Notes list error:', err);
@@ -33,9 +39,17 @@ router.post(
 
     try {
       const { title = '', content = '', pinned = false, tags = [] } = req.body;
-      const note = new Note({ userId: req.user.id, title, content, pinned: !!pinned, tags: Array.isArray(tags) ? tags : [] });
+      const note = new Note({
+        userId: req.user.id,
+        title,
+        content,
+        pinned: !!pinned,
+        tags: Array.isArray(tags) ? tags : []
+      });
       await note.save();
-      return res.status(201).json(note);
+      // populate collaborator info (none initially) for consistency
+      const saved = await Note.findById(note._id).populate('collaborators.userId', 'username email').lean();
+      return res.status(201).json(saved);
     } catch (err) {
       console.error('Create note error:', err);
       return res.status(500).json({ message: 'Server error' });
@@ -46,9 +60,11 @@ router.post(
 // get note
 router.get('/:id', async (req, res) => {
   try {
-    const note = await Note.findById(req.params.id).lean();
+    const note = await Note.findById(req.params.id).populate('collaborators.userId', 'username email').lean();
     if (!note) return res.status(404).json({ message: 'Note not found' });
-    if (!canView(note, req.user.id)) return res.status(403).json({ message: 'Forbidden' });
+
+    // pass full req.user so permission helper can use id & email
+    if (!canView(note, req.user)) return res.status(403).json({ message: 'Forbidden' });
     return res.json(note);
   } catch (err) {
     console.error('Get note error:', err);
@@ -70,7 +86,8 @@ router.put(
     try {
       const note = await Note.findById(req.params.id);
       if (!note) return res.status(404).json({ message: 'Note not found' });
-      if (!canEdit(note, req.user.id)) return res.status(403).json({ message: 'Forbidden' });
+
+      if (!canEdit(note, req.user)) return res.status(403).json({ message: 'Forbidden' });
 
       const allowed = ['title', 'content', 'pinned', 'tags'];
       for (const k of allowed) {
@@ -78,7 +95,8 @@ router.put(
       }
 
       await note.save();
-      return res.json(note);
+      const saved = await Note.findById(note._id).populate('collaborators.userId', 'username email').lean();
+      return res.json(saved);
     } catch (err) {
       console.error('Update note error:', err);
       return res.status(500).json({ message: 'Server error' });
@@ -91,7 +109,9 @@ router.delete('/:id', async (req, res) => {
   try {
     const note = await Note.findById(req.params.id);
     if (!note) return res.status(404).json({ message: 'Note not found' });
-    if (!isOwner(note, req.user.id)) return res.status(403).json({ message: 'Only owner can delete' });
+
+    if (!isOwner(note, req.user)) return res.status(403).json({ message: 'Only owner can delete' });
+
     await Note.deleteOne({ _id: note._id });
     return res.json({ message: 'Deleted' });
   } catch (err) {
@@ -117,7 +137,8 @@ router.post(
     try {
       const note = await Note.findById(req.params.id);
       if (!note) return res.status(404).json({ message: 'Note not found' });
-      if (!isOwner(note, req.user.id)) return res.status(403).json({ message: 'Only owner can share' });
+
+      if (!isOwner(note, req.user)) return res.status(403).json({ message: 'Only owner can share' });
 
       let targetUser = null;
       if (req.body.userId) {
@@ -132,12 +153,17 @@ router.post(
 
       if (note.userId.toString() === targetUser._id.toString()) return res.status(400).json({ message: 'User already owner' });
 
-      const existing = note.collaborators.find(c => c.userId.toString() === targetUser._id.toString());
+      const existing = note.collaborators.find(c => c.userId && c.userId.toString() === targetUser._id.toString());
       if (existing) existing.role = req.body.role;
       else note.collaborators.push({ userId: targetUser._id, role: req.body.role });
 
       await note.save();
-      return res.status(200).json({ message: 'Collaborator added/updated', collaborator: { id: targetUser._id, email: targetUser.email, role: req.body.role } });
+      const saved = await Note.findById(note._id).populate('collaborators.userId', 'username email').lean();
+      return res.status(200).json({
+        message: 'Collaborator added/updated',
+        collaborator: { id: targetUser._id, email: targetUser.email, role: req.body.role },
+        note: saved
+      });
     } catch (err) {
       console.error('Share note error:', err);
       return res.status(500).json({ message: 'Server error' });
@@ -150,7 +176,8 @@ router.get('/:id/collaborators', async (req, res) => {
   try {
     const note = await Note.findById(req.params.id).populate('collaborators.userId', 'username email').lean();
     if (!note) return res.status(404).json({ message: 'Note not found' });
-    if (!canView(note, req.user.id)) return res.status(403).json({ message: 'Forbidden' });
+
+    if (!canView(note, req.user)) return res.status(403).json({ message: 'Forbidden' });
     return res.json(note.collaborators || []);
   } catch (err) {
     console.error('List note collaborators error:', err);
@@ -163,14 +190,16 @@ router.delete('/:id/collaborators/:collabId', async (req, res) => {
   try {
     const note = await Note.findById(req.params.id);
     if (!note) return res.status(404).json({ message: 'Note not found' });
-    if (!isOwner(note, req.user.id)) return res.status(403).json({ message: 'Only owner can remove collaborators' });
+
+    if (!isOwner(note, req.user)) return res.status(403).json({ message: 'Only owner can remove collaborators' });
 
     const before = note.collaborators.length;
     note.collaborators = note.collaborators.filter(c => c._id.toString() !== req.params.collabId);
     if (note.collaborators.length === before) return res.status(404).json({ message: 'Collaborator not found' });
 
     await note.save();
-    return res.json({ message: 'Removed' });
+    const saved = await Note.findById(note._id).populate('collaborators.userId', 'username email').lean();
+    return res.json({ message: 'Removed', note: saved });
   } catch (err) {
     console.error('Remove note collaborator error:', err);
     return res.status(500).json({ message: 'Server error' });
